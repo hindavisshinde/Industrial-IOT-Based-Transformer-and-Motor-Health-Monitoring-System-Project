@@ -1,0 +1,164 @@
+// Include necessary libraries
+#include <Arduino.h>
+#include <AdafruitIO_WiFi.h>
+#include "config.h" // Include your WiFi and Adafruit IO credentials
+#include <Adafruit_Sensor.h>
+#include <Adafruit_ADXL345_U.h>
+
+#define CURRENT_SENSOR_AC (0)   // for current sensor
+
+unsigned long previousMillis = 0;  // Variable to store the last time the loop was executed
+const long interval = 7500;  // Interval in milliseconds between each loop execution
+
+Adafruit_ADXL345_Unified accel = Adafruit_ADXL345_Unified(12345);
+
+// Define the analog pin to which sensors are connected
+const int analogPin1 = 33; // Replace with your chosen ESP32 analog input pin for temprature sensor sensor
+const int analogInPin2 = 34; // Replace with your chosen ESP32 analog input pin for current sensor
+
+const float adcReferenceVoltage = 3300.0; // ADC reference voltage of the ESP32
+const float acs758Sensitivity = 0.04; // Sensitivity of ACS758 (40mV/A)
+
+const float SHUNT_RESISTOR = 20.0;
+// Define the offset value
+const float temperatureOffset = 14.0;
+
+AdafruitIO_Feed *temperatureFeed = io.feed("temperature"); 
+AdafruitIO_Feed *vibrationFeed = io.feed("vibration");
+AdafruitIO_Feed *currentFeed = io.feed("current");
+
+void setup()
+ {
+    // Start the Serial communication
+    Serial.begin(115200);
+
+   if(!accel.begin()) {
+      Serial.println("Could not find a valid ADXL345 sensor, check wiring!");
+      while(1);
+  }
+
+  // Connect to Wi-Fi
+  connectToWiFi();
+ 
+   Serial.print("Connecting to Adafruit IO");
+   io.connect();
+
+  // wait for a connection
+  while(io.status() < AIO_CONNECTED)
+   {
+    Serial.print(".");
+    delay(500);
+   }
+
+  // we are connected
+  Serial.println();
+  Serial.println(io.statusText());
+
+
+  // Initialize the ADC
+  analogReadResolution(12); // Set ADC resolution to 12 bits
+
+}
+void loop() {
+
+   unsigned long currentMillis = millis();  // Get the current time
+
+    if (currentMillis - previousMillis >= interval)
+    { 
+    // Check if it's time to execute the loop
+        previousMillis = currentMillis;  // Update the last execution time
+
+    readtemprature(); // function call for temprature sensor
+
+    readvibration(); // function call for vibration sensor
+
+    readcurrent(); // function call for current sensor
+    
+    }
+}
+
+void connectToWiFi()
+ {
+    Serial.print("Connecting to Wi-Fi");
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+  }
+
+     Serial.println("\nConnected to Wi-Fi");
+}
+
+void readtemprature()
+{
+   // Read the analog value from the LM35 sensor
+  int adcValue = analogRead(analogPin1);
+       
+  // Convert ADC value to voltage (in millivolts)
+  float voltageT = (adcValue / 4095.0) * 3300;
+
+  // Convert voltage to temperature (in Celsius) and add the offset
+  float temperatureC = (voltageT / 10.0) + temperatureOffset;
+
+  // Print ADC value and temperature to the Serial Monitor
+  Serial.println("temprature Data");
+  Serial.println(adcValue);
+  Serial.print("\tTemperature: ");
+  Serial.print(temperatureC);
+  Serial.println(" °C");
+   
+    temperatureFeed->save(temperatureC);
+}
+
+void readvibration()
+{
+  sensors_event_t event;
+  accel.getEvent(&event);
+  float accelerationX = event.acceleration.x;
+  float accelerationY = event.acceleration.y;
+  float accelerationZ = event.acceleration.z;
+
+  float accelerationMagnitude = sqrt(pow(accelerationX, 2) + pow(accelerationY, 2) + pow(accelerationZ, 2));
+  Serial.println("Vibration Sensor Data");
+  Serial.print("X: "); Serial.print(event.acceleration.x); Serial.print("  ");
+  Serial.print("Y: "); Serial.print(event.acceleration.y); Serial.print("  ");
+  Serial.print("Z: "); Serial.print(event.acceleration.z); Serial.println();
+  Serial.println(accelerationMagnitude);
+
+  float threshold = 12.0; // Adjust based on experimentation
+if (accelerationMagnitude > threshold)
+ {
+    // Vibration detected
+    Serial.println("Vibration detected!");
+}
+else{
+  Serial.println("vibration not dectected");
+}
+     vibrationFeed->save(accelerationMagnitude);
+  }
+
+
+void readcurrent()
+{
+  int adcValue = analogRead(analogInPin2);
+  float voltageC = (adcValue/ 4095.0) * adcReferenceVoltage; // Convert ADC reading to voltage
+
+
+#ifdef CURRENT_SENSOR_AC
+  float current = voltageC / acs758Sensitivity; // Calculate current using ACS758 sensitivity
+#else
+  current = voltageC / SHUNT_RESISTOR;
+#endif
+ 
+  Serial.println("Current Sensor Data");
+  Serial.print("Raw ADC Value: ");
+  Serial.print(adcValue);
+  Serial.print(" Voltage: ");
+  Serial.print(voltageC, 4);
+  Serial.print("V Current: ");
+  Serial.print(current,2);
+  Serial.println("mA");
+
+    currentFeed->save(current);
+}
